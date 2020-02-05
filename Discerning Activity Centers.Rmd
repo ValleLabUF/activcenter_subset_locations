@@ -1,0 +1,152 @@
+---
+title: "Discerning Activity Centers"
+author: "Josh Cullen"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  pdf_document: 
+    fig_caption: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+# Identification of Activity Centers
+
+The identification of activity centers (ACs) can be used to include a measure of spatial bias within the modeling framework of snail kite movement, as well as to provide a method of dimensional reducation for this large dataset. This activity center model allows the flexible selection of the maximum number that the user wishes to identify, with total number of ACs ranging from 15-20 as likely the most interpretable.
+
+In the implemented model, a maximum of 20 possible activity centers was selected and the coordinates from the 37 grid cells with counts of > 100 observations (from all IDs) were used to definite initial and possible ACs for the model. Activity centers were assigned to spatial time segments across all snail kite IDs. There was some overlap in AC use among IDs as shown below.
+\hfill\break
+
+```{r load and import}
+#load libraries and read important functions
+library('Rcpp')
+library(raster)
+library(sf)
+library(ggplot2)
+library(dplyr)
+library(viridis)
+library(progress)
+library(rnaturalearth)
+library(rnaturalearthdata)
+
+
+sourceCpp('aux1.cpp')
+source('gibbs sampler.R')
+source('gibbs functions.R')
+source('helper functions.R')
+
+#################
+### Load data ###
+#################
+
+
+#load data
+dat<- read.csv("Snail Kite Gridded Data.csv", header = T, sep = ",")
+obs<- get.summary.stats_obs(dat)  #frequency of visitation in each location (column) for each time segment (row)
+
+#geographical coordinates of locations
+utm.crs<- CRS('+init=epsg:32617')
+extent<- extent(min(dat$utmlong), max(dat$utmlong), min(dat$utmlat), max(dat$utmlat))
+res<- 5000
+buffer<- 10000
+grid.coord<- grid.summary.table(dat=dat, crs=utm.crs, extent=extent, res=res, buffer=buffer)
+dat<- left_join(dat, grid.coord, by="grid.cell") #add gridded locs to DF
+
+#Define initial activity centers (obs > 100)
+tmp<- which(apply(obs[,-1], 2, sum) > 100)
+nobs<- colSums(obs[,tmp+1])
+ac.coord.init<- grid.coord[tmp,-3]
+ac.coord.init<- cbind(ac.coord.init, nobs)
+
+#Highest 20 of 37 initial ACs
+ac.coord.init2<- arrange(ac.coord.init, desc(nobs)) %>% slice(n=1:20)
+
+```
+
+```{r ACs}
+ac<- read.csv("ac.csv", header = T, sep = ',')
+obs<- cbind(ac, obs)
+
+############################
+### Add ACs to Dataframe ###
+############################
+
+
+obs1<- obs %>% filter(id == 1) %>% mutate(time.seg = 1:nrow(.)) %>% dplyr::select(ac, time.seg)
+obs12<- obs %>% filter(id == 12) %>% mutate(time.seg = 1:nrow(.)) %>% dplyr::select(ac, time.seg)
+obs19<- obs %>% filter(id == 19) %>% mutate(time.seg = 1:nrow(.)) %>% dplyr::select(ac, time.seg)
+obs27<- obs %>% filter(id == 27) %>% mutate(time.seg = 1:nrow(.)) %>% dplyr::select(ac, time.seg)
+
+dat1<- dat %>% filter(id == 1) %>% left_join(obs1, by = "time.seg")
+dat12<- dat %>% filter(id == 12) %>% left_join(obs12, by = "time.seg")
+dat19<- dat %>% filter(id == 19) %>% left_join(obs19, by = "time.seg")
+dat27<- dat %>% filter(id == 27) %>% left_join(obs27, by = "time.seg")
+
+dat<- rbind(dat1, dat12, dat19, dat27)
+```
+
+```{r ACs used, echo=TRUE}
+#Calculate number of observations per AC
+dat %>% filter(id==1) %>% dplyr::select(ac) %>% table()
+dat %>% filter(id==12) %>% dplyr::select(ac) %>% table()
+dat %>% filter(id==19) %>% dplyr::select(ac) %>% table()
+dat %>% filter(id==27) %>% dplyr::select(ac) %>% table()
+```
+\hfill\break
+
+This shows there are many ACs that are shared across up to 3 IDs (e.g., ACs 1, 2, 4, 6, 11, 12, 18), which may denote areas of high use by individuals throughout the population. This will be investigated in more detail in the following plots.
+\newpage
+
+
+# Compare Modeled ACs Against Initial Coordinates
+
+To see how this fleixble the model was in assigning possible ACs in space, these modeled ACs will be compared against the 37 locations of the initial coordinates as well as the locations of the 20 locations (grid cells) with the highest number of observations. This is done to see if the model is biased or restricted to assigning ACs at these initial locations and staying at local maxima as opposed to global maxima.
+\hfill\break
+
+
+```{r, fig.align='center', fig.height=8, fig.width=6}
+## Map
+
+#Load world map data
+usa <- ne_states(country = "United States of America", returnclass = "sf")
+fl<- usa %>% filter(name == "Florida")
+fl<- sf::st_transform(fl, crs = "+init=epsg:32617") #change projection to UTM 17N
+
+ac.coords<- read.csv("Activity Center Coordinates.csv", header = T, sep = ',')
+
+
+# ACs and initial values
+ggplot() +
+  geom_sf(data = fl) +
+  coord_sf(xlim = c(min(dat$utmlong-20000), max(dat$utmlong+20000)),
+           ylim = c(min(dat$utmlat-20000), max(dat$utmlat+20000)), expand = FALSE) +
+  geom_point(data = ac.coord.init, aes(x, y, color = "A (initial: n=37)"), size = 2) +
+  geom_point(data = ac.coord.init2, aes(x, y, color = "B (highest: n=20)"), size = 5, pch = 1) +
+  geom_point(data = ac.coords, aes(x, y, color = "C (model: n=20)"), size = 3, alpha = 0.5) +
+  labs(x="Longitude", y="Latitude") +
+  scale_color_manual("", values = c("grey40",viridis(n=5)[c(3,5)])) +
+  theme_bw()
+```
+
+This plot shows that of the 20 modeled ACs, only one AC was not assigned to a location that was one of the initial ACs for the model. Of the other 19 modeled ACs, most were found at locations with the greatest number of observations (open green circles), but a few were at less visited locations of these original 37. So it appears that there is some flexibility in that the model isn't entirely stuck at the most visited locations, but doesn't explore the continuous space of the area of interest (as demonstrated by the single AC not associated with an initial location).  
+  
+# Compare ACs Against Snail Kite Observations
+
+To follow the comparison of modeled ACs against initial values, I will now show the AC assignments of all relocations by ID to determine how well these ACs match up with the raw data. (**N.B.** The ACs are assigned by time segment, but plotted by observation. This may result in AC assignments that don't necessarily match with intuitive expectations.)
+\hfill\break
+
+```{r, fig.align='center', fig.height=7, fig.width=5}
+# ACs and snail kite locs
+ggplot() +
+  geom_sf(data = fl) +
+  coord_sf(xlim = c(min(dat$utmlong-20000), max(dat$utmlong+20000)),
+           ylim = c(min(dat$utmlat-20000), max(dat$utmlat+20000)), expand = FALSE) +
+  geom_point(data = dat, aes(utmlong, utmlat, color=ac), size=1, alpha = 0.6) +
+  geom_point(data = ac.coords, aes(x, y, color = ac), size = 4, pch = 1, stroke = 1) +
+  scale_color_viridis_c("Activity Center") +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_bw() +
+  facet_wrap(~id)
+```
+
