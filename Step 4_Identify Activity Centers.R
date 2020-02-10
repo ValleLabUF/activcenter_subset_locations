@@ -27,6 +27,7 @@ source('helper functions.R')
 #load data
 dat<- read.csv("Snail Kite Gridded Data_TOHO.csv", header = T, sep = ",")
 obs<- get.summary.stats_obs(dat)  #frequency of visitation in each location (column) for each time segment (row)
+obs1<- as.matrix(obs[,-1])  #for proper use by model
 
 #geographical coordinates of locations
 utm.crs<- CRS('+init=epsg:32617')
@@ -34,14 +35,12 @@ extent<- extent(min(dat$x), max(dat$x), min(dat$y), max(dat$y))
 res<- 5000
 buffer<- 10000
 grid.coord<- grid.summary.table(dat=dat, crs=utm.crs, extent=extent, res=res, buffer=buffer)
-# dat<- left_join(dat, grid.coord, by="grid.cell") #add gridded locs to DF
 
 #Define initial activity centers (top 50 by # of obs)
 tmp<- colSums(obs[,-1]) %>% data.frame(grid.cell = colnames(obs[,-1]), nobs = .) %>%
       arrange(desc(nobs)) %>% slice(n=1:50) %>% dplyr::select(grid.cell)
 tmp<- tmp$grid.cell %>% as.character() %>% as.numeric()
 ind<- sample(tmp, size = 20, replace = F)
-# nobs<- colSums(obs[,ind+1])
 ac.coord.init<- grid.coord[ind,]
 
 #top 50
@@ -64,7 +63,7 @@ gamma1=0.1
 #run gibbs sampler
 options(warn=2)
 
-res=gibbs.activity.center(dat=obs[,-1],grid.coord=grid.coord[,-3],n.ac=n.ac,
+res=gibbs.activity.center(dat=obs1,grid.coord=grid.coord[,-3],n.ac=n.ac,
                           ac.coord.init=ac.coord.init[,-3],gamma1=gamma1,
                           possib.ac=possib.ac[,-3])
 
@@ -89,11 +88,20 @@ for (i in 1:length(unique(ac))) {
   ac.coords[i,]<- round(c(tmp[i], tmp[i+length(unique(ac))]), 0)
 }
 
-ac.coords<- data.frame(ac.coords, ac=1:length(unique(ac)))
+#reorder ACs from N -> S
+ac.coords<- data.frame(ac.coords, ac=1:length(unique(ac))) %>% .[order(.$y, decreasing = TRUE),]
+ac.coords<- cbind(ac.coords, ac.ns = 1:nrow(ac.coords))
+
+ac.ns<- list()
+for (i in 1:length(ac)) {
+  ac.ns[i]<- which(ac[i] == ac.coords$ac)
+}
+ac.ns<- unlist(ac.ns)  #ac assignments order N -> S
 
 # ac.coords<- read.csv("Activity Center Coordinates.csv", header = T, sep = ',')
 # ac<- read.csv("ac.csv", header = T, sep = ',')
 table(ac)
+table(ac.ns)
 
 
 
@@ -105,7 +113,7 @@ table(ac)
 
 tseg.length<- dat %>% group_by(id, tseg) %>% tally()
 tseg.length<- tseg.length$n
-ac.aug<- rep(ac, times = tseg.length)
+ac.aug<- rep(ac.ns, times = tseg.length)
 
 dat$ac<- ac.aug
 
@@ -135,12 +143,13 @@ ggplot() +
   geom_sf(data = lakes10, fill = "lightblue", alpha = 0.65) +
   coord_sf(xlim = c(min(dat$x-20000), max(dat$x+20000)),
            ylim = c(min(dat$y-20000), max(dat$y+20000)), expand = FALSE) +
-  geom_point(data = ac.coord.init2, aes(x, y, color = "Highest: n=50"), size = 5, shape = 1) +
-  geom_point(data = ac.coords, aes(x, y, color = "Model: n=20"), size = 3) +
-  geom_point(data = nests, aes(x, y, color = "Nests"), shape = 17, size = 2) +
+  geom_point(data = dat, aes(x, y, fill = "Raw"), shape = 21, size = 1,
+             alpha = 0.2) +
+  geom_point(data = nests, aes(x, y, fill = "Nests"), shape = 24, size = 3.5, alpha = 0.7) +
+  geom_point(data = ac.coords, aes(x, y, fill = "ACs"), shape = 21, size = 3, alpha = 0.8) +
   labs(x="Longitude", y="Latitude") +
-  scale_color_manual("", values = c("grey40",viridis(n=5)[3],"red")) +
-  guides(color = guide_legend(override.aes = list(shape = c(1, 16, 17)))) +
+  scale_fill_manual("", values = c(viridis(n=2)[1],"red","grey55")) +
+  guides(fill = guide_legend(override.aes = list(shape = c(21,24,21)))) +
   theme_bw()
 
 # ACs and snail kite locs

@@ -45,23 +45,25 @@ get.summary.stats_obs=function(dat){  #dat must have tseg assigned; for all IDs
   n<- length(id)
   obs.list<- vector("list", n)
   names(obs.list)<- id
+  nloc=length(unique(dat$grid.cell))
   
   
   #calculate # of obs in each grid.cell by tseg
   for (i in 1:length(dat.list)) {
     ntseg=max(dat.list[[i]]$tseg)
-    nloc=length(unique(dat$grid.cell))
     res=matrix(0, ntseg, nloc)
     colnames(res)=1:nloc
   
     for (j in 1:ntseg){
-      ind=dat.list[[i]] %>% filter(tseg==j) %>% group_by(grid.cell) %>% tally()
+      ind=dat.list[[i]] %>% filter(tseg == j) %>% group_by(grid.cell) %>% tally()
       res[j,ind$grid.cell]=ind$n #takes count of each cluster within given time segment
     }
-    id<- rep(unique(dat.list[[i]]$id), ntseg)
-    res=cbind(id, res)
+    id1<- rep(unique(dat.list[[i]]$id), ntseg) %>% as.character()
+    res=cbind(id = id1, res)
     obs.list[[i]]=res
   }
-  obs<- do.call(rbind.data.frame, obs.list) %>% data.matrix()
+  obs<- do.call(rbind.data.frame, obs.list)
+  obs<- mutate_at(obs, 2:ncol(obs), c("as.character")) %>% mutate_at(2:ncol(obs),
+                                                                     c("as.numeric"))
   obs
 }
