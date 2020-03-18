@@ -25,15 +25,15 @@ source('helper functions.R')
 
 
 #load data
-dat<- read.csv("Snail Kite Gridded Data_TOHO.csv", header = T, sep = ",")
+dat<- read.csv("Snail Kite Gridded Data_TOHO15km.csv", header = T, sep = ",")
 obs<- get.summary.stats_obs(dat)  #frequency of visitation in each location (column) for each time segment (row)
 obs1<- as.matrix(obs[,-1])  #for proper use by model
 
 #geographical coordinates of locations
 utm.crs<- CRS('+init=epsg:32617')
 extent<- extent(min(dat$x), max(dat$x), min(dat$y), max(dat$y))
-res<- 5000
-buffer<- 10000
+res<- 15000
+buffer<- 2*res
 grid.coord<- grid.summary.table(dat=dat, crs=utm.crs, extent=extent, res=res, buffer=buffer)
 
 #Define initial activity centers (top 50 by # of obs)
