@@ -36,7 +36,8 @@ utm.crs<- CRS('+init=epsg:32643')
 extent<- extent(min(dat$x), max(dat$x), min(dat$y), max(dat$y))
 res<- 10000
 buffer<- 2*res
-grid.coord<- grid.summary.table(dat=dat, crs=utm.crs, extent=extent, res=res, buffer=buffer)
+grid.coord<- grid.summary.table(dat=dat, crs=utm.crs, extent=extent, res=res, buffer=buffer,
+                                method = "median")
 
 
 #Load world map data
@@ -44,7 +45,7 @@ afg <- ne_states(country = "Afghanistan", returnclass = "sf") %>%
   st_transform(utm.crs)
 
 #rivers
-rivers10 <- ne_download(scale = 10, type = 'rivers_lake_centerlines', category = 'physical',
+rivers10<- ne_download(scale = 10, type = 'rivers_lake_centerlines', category = 'physical',
                         returnclass = "sf")
 rivers10<- sf::st_transform(rivers10, crs = "+init=epsg:32643") %>%
   sf::st_crop(xmin = min(dat$x-11000), xmax = max(dat$x+11000),
@@ -63,6 +64,23 @@ ac.coord.init2<- grid.coord[tmp,]
 
 #potential locations for activity centers (AC)
 possib.ac=grid.coord #these don't have to be identical (i.e., we can define AC's on a coarser grid)
+
+
+#Viz possible AC locations
+ggplot() +
+  geom_sf(data = afg) +
+  geom_sf(data = rivers10, color = "lightblue", alpha = 0.65, lwd = 5) +
+  coord_sf(xlim = c(min(dat$x-10000), max(dat$x+10000)),
+           ylim = c(min(dat$y-10000), max(dat$y+10000)), expand = FALSE) +
+  geom_point(data = dat, aes(x, y, fill = "Observations"), shape = 21, size = 1,
+             alpha = 0.2) +
+  geom_point(data = possib.ac, aes(x, y, fill = "Possible AC Locations"), shape = 21, size = 2) +
+  labs(x="Longitude", y="Latitude") +
+  guides(fill = guide_legend(override.aes = list(size = 3))) +
+  scale_fill_manual("", values = c("grey55","red")) +
+  theme_bw() +
+  theme(legend.position = "top", axis.title = element_text(size = 16),
+        axis.text = element_text(size = 12), legend.text = element_text(size = 12))
 
 
 #########################
@@ -103,18 +121,18 @@ for (i in 1:length(unique(ac))) {
   ac.coords[i,]<- round(c(tmp[i], tmp[i+length(unique(ac))]), 0)
 }
 
-#reorder ACs from E -> W
+#reorder ACs from W -> E
 ac.coords<- data.frame(ac.coords, ac=1:length(unique(ac))) %>% .[order(.$x, decreasing = FALSE),]
-ac.coords<- cbind(ac.coords, ac.ew = 1:nrow(ac.coords))
+ac.coords<- cbind(ac.coords, ac.we = 1:nrow(ac.coords))
 
-ac.ew<- list()
+ac.we<- list()
 for (i in 1:length(ac)) {
-  ac.ew[i]<- which(ac[i] == ac.coords$ac)
+  ac.we[i]<- which(ac[i] == ac.coords$ac)
 }
-ac.ew<- unlist(ac.ew)  #ac assignments order E -> W
+ac.we<- unlist(ac.we)  #ac assignments order W -> E
 
 table(ac)
-table(ac.ew)
+table(ac.we)
 
 
 
@@ -126,7 +144,7 @@ table(ac.ew)
 
 tseg.length<- dat %>% group_by(id, tseg) %>% tally()
 tseg.length<- tseg.length$n
-ac.aug<- rep(ac.ew, times = tseg.length)
+ac.aug<- rep(ac.we, times = tseg.length)
 
 dat$ac<- ac.aug
 
@@ -142,18 +160,20 @@ dat %>% group_by(id) %>% dplyr::select(ac) %>% table()
 
 
 
-# ACs and initial values
+# ACs and observations
 ggplot() +
   geom_sf(data = afg) +
   geom_sf(data = rivers10, color = "lightblue", alpha = 0.65, lwd = 5) +
   coord_sf(xlim = c(min(dat$x-10000), max(dat$x+10000)),
            ylim = c(min(dat$y-10000), max(dat$y+10000)), expand = FALSE) +
-  geom_point(data = dat, aes(x, y, fill = "Raw"), shape = 21, size = 1,
+  geom_point(data = dat, aes(x, y, fill = "Observations"), shape = 21, size = 1,
              alpha = 0.2) +
   geom_point(data = ac.coords, aes(x, y, fill = "ACs"), shape = 21, size = 3, alpha = 0.8) +
   labs(x="Longitude", y="Latitude") +
   scale_fill_manual("", values = c(viridis(n=5)[4],"grey55")) +
-  theme_bw()
+  theme_bw() +
+  theme(legend.position = "top", axis.title = element_text(size = 16),
+        axis.text = element_text(size = 12), legend.text = element_text(size = 12))
 
 # ACs and snow leopard locs
 ggplot() +
@@ -162,7 +182,7 @@ ggplot() +
   coord_sf(xlim = c(min(dat$x-10000), max(dat$x+10000)),
            ylim = c(min(dat$y-10000), max(dat$y+10000)), expand = FALSE) +
   geom_point(data = dat, aes(x, y, color=ac), size=1, alpha = 0.6) +
-  geom_point(data = ac.coords, aes(x, y, fill = ac.ew), color = "black", size = 3, pch = 21,
+  geom_point(data = ac.coords, aes(x, y, fill = ac.we), color = "black", size = 3, pch = 21,
              stroke = 1, alpha = 0.8) +
   scale_color_viridis_c("Activity Center") +
   scale_fill_viridis_c(guide = F) +
@@ -172,7 +192,7 @@ ggplot() +
 
 
 ## AC Heatmap by month and year (for Pari)
-dat2<- dat[dat$id == "Pahlawan",]
+dat2<- dat[dat$id == "Pari",]
 
 dat2<- dat2 %>% mutate(month = lubridate::month(date), year = lubridate::year(date))
 dat.sum<- dat2 %>% group_by(year, month, ac) %>% tally() %>% group_by(year, month) %>%
