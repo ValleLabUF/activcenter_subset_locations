@@ -92,19 +92,42 @@ get.summary.stats_obs=function(dat){  #dat must have tseg assigned; for all IDs
   obs
 }
 #------------------------------------------------
-plot.heatmap.ac=function(data, ac.coords) {
-  #for now, only plots monthly proportions of AC use
+plot.heatmap.ac=function(data, ac.coords, units) {
+  #plots monthly, weekly, or daily proportions of AC use
   
   data<- data %>%
-    mutate(month = lubridate::month(date), year = lubridate::year(date))
+    mutate(day = lubridate::yday(date), week = lubridate::week(date),
+           month = lubridate::month(date), year = lubridate::year(date))
+  
   dat.sum<- data %>%
-    group_by(year, month, ac) %>%
+    group_by(year, !!units, ac) %>%
     tally() %>%
-    group_by(year, month) %>%
+    group_by(year, !!units) %>%
     mutate(N=sum(n)) %>%
     mutate(prop = n/N)
   
-  dat.sum$date<- as.Date(paste0(dat.sum$year,"-", dat.sum$month,"-01"), "%Y-%m-%d")
+  #create date var based on time unit of interest
+  if (names(dat.sum)[2] == "month") {
+    dat.sum$date<- dat.sum %>% 
+      as_tibble() %>% 
+      mutate(newyears = ymd(paste0(year,"-01-01"))) %>% 
+      transmute(date = newyears + months(month-1)) %>% 
+      pull()
+    
+  } else if (names(dat.sum)[2] == "week") {
+    dat.sum$date<- dat.sum %>% 
+      as_tibble() %>% 
+      mutate(newyears = ymd(paste0(year,"-01-01"))) %>% 
+      transmute(date = newyears + weeks(week-1)) %>% 
+      pull()
+    
+  } else if (names(dat.sum)[2] == "day") {
+    dat.sum$date<- dat.sum %>% 
+      as_tibble() %>% 
+      mutate(newyears = ymd(paste0(year,"-01-01"))) %>% 
+      transmute(date = newyears + days(day-1)) %>% 
+      pull()
+  }
   
   ac.prop.df<- matrix(0, nrow(ac.coords)*length(unique(dat.sum$date)), 3)
   colnames(ac.prop.df)<- c("date","ac","prop")
@@ -119,34 +142,26 @@ plot.heatmap.ac=function(data, ac.coords) {
   
   print(
     ggplot(data = ac.prop.df, aes(x=lubridate::as_date(date), y=ac)) +
-      geom_tile(aes(fill=prop), width = 31) +
-      scale_fill_viridis_c("Proportion of\nObservations\nper Month", limits = c(0,1)) +
+      geom_tile(aes(fill=prop), width = ceiling(365/max(dat.sum[,2]))) +
+      scale_fill_viridis_c(paste("Proportion of\nobservations\nper", names(dat.sum)[2]),
+                           limits = c(0,1)) +
       scale_y_continuous(trans = "reverse", breaks = 1:nrow(ac.coords), expand = c(0,0)) +
       scale_x_date(date_labels = "%b %Y", expand = c(0,0)) +
       labs(x="Time", y="Activity Center", title = paste("ID", unique(data$id))) +
       theme_bw() +
       theme(panel.grid = element_blank(), axis.title = element_text(size = 16),
-            axis.text = element_text(size = 12), title = element_text(size = 20))
+            axis.text = element_text(size = 12), plot.title = element_text(size = 20))
   )
   
   
 }
 #------------------------------------------------
-plot.heatmap=function(data, brkpts, dat.res, ac.coords, type) {  #type can either be 'loc' or 'behav' or 'ac'
+plot.ac.spatemp=function(data, ac.coords, units) {
   
-  if (type == "loc") {
+  units<- enquo(units)
+  
     par(ask = TRUE)
-    map(data, ~plot.heatmap.loc(., brkpts = brkpts, dat.res = dat.res))
+    map(data, ~plot.heatmap.ac(., ac.coords = ac.coords, units = units))
     par(ask = FALSE)
-  } else if (type == "behav") {
-    par(ask = TRUE)
-    map(data, ~plot.heatmap.behav(., brkpts = brkpts, dat.res = dat.res))
-    par(ask = FALSE)
-  } else if (type == "ac") {
-    par(ask = TRUE)
-    map(data, ~plot.heatmap.ac(., ac.coords = ac.coords))
-    par(ask = FALSE)
-  } else {
-    stop("Need to select type as either 'loc','behav', or 'ac'.")
-  }
+  
 }

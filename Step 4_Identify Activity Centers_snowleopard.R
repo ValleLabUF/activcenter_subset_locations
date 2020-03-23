@@ -4,14 +4,12 @@ set.seed(10)
 library('Rcpp')
 library(raster)
 library(sf)
-library(ggplot2)
-library(dplyr)
+library(tidyverse)
+library(lubridate)
 library(viridis)
 library(progress)
 library(rnaturalearth)
 library(rnaturalearthdata)
-library(sp)
-library(rgdal)
 
 
 sourceCpp('aux1.cpp')
@@ -34,7 +32,7 @@ obs1<- as.matrix(obs[,-1])  #for proper use by model
 #geographical coordinates of locations
 utm.crs<- CRS('+init=epsg:32643')
 extent<- extent(min(dat$x), max(dat$x), min(dat$y), max(dat$y))
-res<- 10000
+res<- 7000
 buffer<- 2*res
 grid.coord<- grid.summary.table(dat=dat, crs=utm.crs, extent=extent, res=res, buffer=buffer,
                                 method = "median")
@@ -63,7 +61,7 @@ ac.coord.init<- grid.coord[ind,]
 ac.coord.init2<- grid.coord[tmp,]
 
 #potential locations for activity centers (AC)
-possib.ac=grid.coord #these don't have to be identical (i.e., we can define AC's on a coarser grid)
+possib.ac=grid.coord 
 
 
 #Viz possible AC locations
@@ -74,7 +72,8 @@ ggplot() +
            ylim = c(min(dat$y-10000), max(dat$y+10000)), expand = FALSE) +
   geom_point(data = dat, aes(x, y, fill = "Observations"), shape = 21, size = 1,
              alpha = 0.2) +
-  geom_point(data = possib.ac, aes(x, y, fill = "Possible AC Locations"), shape = 21, size = 2) +
+  geom_point(data = grid.coord, aes(x, y, fill = "Possible AC Locations"), shape = 21,
+             size = 2) +
   labs(x="Longitude", y="Latitude") +
   guides(fill = guide_legend(override.aes = list(size = 3))) +
   scale_fill_manual("", values = c("grey55","red")) +
@@ -96,26 +95,27 @@ gamma1=0.1
 #run gibbs sampler
 options(warn=2)
 
-res=gibbs.activity.center(dat=obs1,grid.coord=grid.coord[,-3],n.ac=n.ac,
+dat.res=gibbs.activity.center(dat=obs1,grid.coord=grid.coord[,-3],n.ac=n.ac,
                           ac.coord.init=ac.coord.init[,-3],gamma1=gamma1,
                           possib.ac=possib.ac[,-3])
 
 
 #plot output and look at frequency of AC visitation
-plot(res$logl,type='l')
-plot(res$phi,type='l')
+plot(dat.res$logl,type='l')
+plot(dat.res$phi,type='l')
 
 ##############################################
 ### Extract AC Coordinates and Assignments ###
 ##############################################
 
 ##use ACs from iteration with max log likelihood (after burn-in)
-ML<- res$logl %>% order(decreasing = T)
+ML<- dat.res$logl %>% order(decreasing = T)
 ML<- ML[ML > 500][1]
-ac<- res$z[ML,]
+ac<- dat.res$z[ML,]
+phi<- dat.res$phi[ML,]
 ac.coords<- matrix(NA, length(unique(ac)), 2)
 colnames(ac.coords)<- c("x","y")
-tmp<- res$coord[ML,]
+tmp<- dat.res$coord[ML,]
 
 for (i in 1:length(unique(ac))) {
   ac.coords[i,]<- round(c(tmp[i], tmp[i+length(unique(ac))]), 0)
@@ -191,33 +191,30 @@ ggplot() +
   facet_wrap(~id)
 
 
-## AC Heatmap by month and year (for Pari)
-dat2<- dat[dat$id == "Pari",]
+# Distance decay surface
 
-dat2<- dat2 %>% mutate(month = lubridate::month(date), year = lubridate::year(date))
-dat.sum<- dat2 %>% group_by(year, month, ac) %>% tally() %>% group_by(year, month) %>%
-  mutate(N=sum(n)) %>% mutate(prop = n/N)
-dat.sum$date<- as.Date(paste0(dat.sum$year,"-", dat.sum$month,"-01"), "%Y-%m-%d")
+grid<- create.grid(dat=dat, crs=utm.crs, extent=extent, res=res, buffer=buffer)
+grid[]<- 0
 
-foo<- matrix(0, nrow(ac.coords)*length(unique(dat.sum$date)), 3)
-colnames(foo)<- c("date","ac","prop")
-foo[,1]<- rep(unique(dat.sum$date), each=nrow(ac.coords))
-foo[,2]<- rep(1:nrow(ac.coords), length(unique(dat.sum$date)))
-for (i in 1:nrow(dat.sum)) {
-  ind<- which(dat.sum$date[i] == foo[,1] & dat.sum$ac[i] == foo[,2])
-  foo[ind,3]<- dat.sum$prop[i]
+#pre-calculate distances between each potential AC location (possib.ac) and each actual location in our data (grid.coord)
+dist.mat=GetDistance(AcCoord=data.matrix(ac.coords[,-3]),GridCoord=data.matrix(grid.coord[,-3]), 
+                     Ngrid=nrow(grid.coord), Nac=nrow(ac.coords))
+
+prob=exp(-phi*dist.mat)
+prob=prob/rowSums(prob)
+
+#plot distance decay surface per AC
+par(mfrow = c(4,3))
+for (i in 1:nrow(ac.coords)) {
+  grid[grid.coord$grid.cell]<- prob[,i]  #change prob column to explore each AC
+  plot(grid, axes = F, useRaster = F)
+  points(ac.coords$x, ac.coords$y, pch = 16)
 }
-foo<- data.frame(foo)
+par(mfrow = c(1,1))
 
-ggplot(data = foo, aes(x=lubridate::as_date(date), y=ac)) +
-  geom_tile(aes(fill=prop), width = 31) +
-  scale_fill_viridis_c("Proportion of\nObservations\nper Month") +
-  scale_y_continuous(trans = "reverse", breaks = 1:20, expand = c(0,0)) +
-  scale_x_date(date_labels = "%b %Y", expand = c(0,0)) +
-  labs(x="Time", y="Activity Center") +
-  theme_bw() +
-  theme(panel.grid = element_blank(), axis.title = element_text(size = 16),
-        axis.text = element_text(size = 12))
+## AC Heatmap by month/week/day and year
+dat.list<- df.to.list(dat)
+plot.ac.spatemp(data = dat.list, ac.coords = ac.coords, units = month)
 
 
 

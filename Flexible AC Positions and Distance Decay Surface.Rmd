@@ -1,0 +1,302 @@
+---
+title: "Flexible AC Locations and Decay Surface"
+author: "Josh Cullen"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  pdf_document: 
+    fig_caption: yes
+    latex_engine: xelatex
+header-includes:
+  - \usepackage{float}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, dpi=300, fig.width=7,
+                      dev = 'pdf')
+```
+
+# Background
+
+Updates were made to the activity center (AC) model in terms of the pre-processing functions and graphic visualization of the results. These updates allow the user to (1) define possible AC locations as either the centroid of each occupied grid cell or the mean or median location of all observations within these grid cells, (2) visualize temporal patterns of AC use at multiple temporal scales (day, week, month), and (3) visualize a raster surface produced by the distance decay function for each of the modeled ACs. I will provide examples of each below with the snow leopard data to demonstrate their utility.
+
+
+# Define possible AC locations
+
+The resulting AC locations after running the model on the snow leopard data were not satisfactory since most points either did not overlap a high point density location or did not overlap any observations. This is due to the effect of using a relatively coarse grid resolution while also restricting all ACs to be proposed at the centroids of occupied grid cells. To improve the placement of these ACs, the possible locations can now be pre-specified as either the mean or median of observations within each grid cell as well as the centroid of grid cells. The plots below demonstrate these examples in each case.
+
+```{r}
+set.seed(10)
+
+#load libraries and read important functions
+library('Rcpp')
+library(raster)
+library(sf)
+library(tidyverse)
+library(lubridate)
+library(viridis)
+library(progress)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(knitr)
+
+
+sourceCpp('aux1.cpp')
+source('gibbs sampler.R')
+source('gibbs functions.R')
+source('helper functions.R')
+```
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+#################
+### Load data ###
+#################
+
+
+#load data
+dat<- read.csv("Snow Leopard Gridded Data.csv", header = T, sep = ",")
+obs<- get.summary.stats_obs(dat)  #frequency of visitation in each location (column) for each time segment (row)
+obs1<- as.matrix(obs[,-1])  #for proper use by model
+
+#geographical coordinates of locations
+utm.crs<- CRS('+init=epsg:32643')
+extent<- extent(min(dat$x), max(dat$x), min(dat$y), max(dat$y))
+res<- 7000
+buffer<- 2*res
+grid.coord.med<- grid.summary.table(dat=dat, crs=utm.crs, extent=extent, res=res, buffer=buffer,
+                                method = "median")
+grid.coord.mean<- grid.summary.table(dat=dat, crs=utm.crs, extent=extent, res=res, buffer=buffer,
+                                method = "mean")
+grid.coord.cen<- grid.summary.table(dat=dat, crs=utm.crs, extent=extent, res=res, buffer=buffer,
+                                method = "centroid")
+
+
+#Load world map data
+afg <- ne_states(country = "Afghanistan", returnclass = "sf") %>%
+  st_transform(utm.crs)
+
+#rivers
+rivers10<- ne_download(scale = 10, type = 'rivers_lake_centerlines', category = 'physical',
+                        returnclass = "sf")
+rivers10<- sf::st_transform(rivers10, crs = "+init=epsg:32643") %>%
+  sf::st_crop(xmin = min(dat$x-11000), xmax = max(dat$x+11000),
+              ymin = min(dat$y-11000), ymax = max(dat$y+11000))
+
+```
+
+```{r, fig.align='center', out.width='1.0\\linewidth', fig.pos='H'}
+
+#Viz possible AC locations
+
+#centroid
+ggplot() +
+  geom_sf(data = afg) +
+  geom_sf(data = rivers10, color = "lightblue", alpha = 0.65, lwd = 5) +
+  coord_sf(xlim = c(min(dat$x-10000), max(dat$x+10000)),
+           ylim = c(min(dat$y-10000), max(dat$y+10000)), expand = FALSE) +
+  geom_point(data = dat, aes(x, y, fill = "Observations"), shape = 21, size = 1,
+             alpha = 0.2) +
+  geom_point(data = grid.coord.cen, aes(x, y, fill = "Possible AC Locations"), shape = 21,
+             size = 2) +
+  labs(x="Longitude", y="Latitude", title = "Centroid") +
+  guides(fill = guide_legend(override.aes = list(size = 3))) +
+  scale_fill_manual("", values = c("grey55","red")) +
+  theme_bw() +
+  theme(legend.position = "top", axis.title = element_text(size = 16),
+        axis.text = element_text(size = 12), legend.text = element_text(size = 12),
+        plot.title = element_text(size = 16, face = "bold"))
+
+#mean
+ggplot() +
+  geom_sf(data = afg) +
+  geom_sf(data = rivers10, color = "lightblue", alpha = 0.65, lwd = 5) +
+  coord_sf(xlim = c(min(dat$x-10000), max(dat$x+10000)),
+           ylim = c(min(dat$y-10000), max(dat$y+10000)), expand = FALSE) +
+  geom_point(data = dat, aes(x, y, fill = "Observations"), shape = 21, size = 1,
+             alpha = 0.2) +
+  geom_point(data = grid.coord.mean, aes(x, y, fill = "Possible AC Locations"), shape = 21,
+             size = 2) +
+  labs(x="Longitude", y="Latitude", title = "Mean") +
+  guides(fill = guide_legend(override.aes = list(size = 3))) +
+  scale_fill_manual("", values = c("grey55","red")) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title = element_text(size = 16),
+        axis.text = element_text(size = 12), legend.text = element_text(size = 12),
+        plot.title = element_text(size = 16, face = "bold"))
+
+#median
+ggplot() +
+  geom_sf(data = afg) +
+  geom_sf(data = rivers10, color = "lightblue", alpha = 0.65, lwd = 5) +
+  coord_sf(xlim = c(min(dat$x-10000), max(dat$x+10000)),
+           ylim = c(min(dat$y-10000), max(dat$y+10000)), expand = FALSE) +
+  geom_point(data = dat, aes(x, y, fill = "Observations"), shape = 21, size = 1,
+             alpha = 0.2) +
+  geom_point(data = grid.coord.med, aes(x, y, fill = "Possible AC Locations"), shape = 21,
+             size = 2) +
+  labs(x="Longitude", y="Latitude", title = "Median") +
+  guides(fill = guide_legend(override.aes = list(size = 3))) +
+  scale_fill_manual("", values = c("grey55","red")) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title = element_text(size = 16),
+        axis.text = element_text(size = 12), legend.text = element_text(size = 12),
+        plot.title = element_text(size = 16, face = "bold"))
+
+
+```
+\hfill\break
+
+Based on these potential AC positions on a grid with a resolution of 7 km, the ACs calculated as the median location of observations per grid cell appears to fit the best with the data. Therefore, the mixture model for estimating AC locations and assigning these to time segments of all individuals was performed using the median locations for all occupied grid cells.
+
+
+# Evaluate temporal patterns of AC visitation at multiple scales
+
+While I have previously shown patterns of AC visitation for each individual as a heatmap of AC use over time, this was only performed on a monthly basis. For many users, they may wish to evaluate AC use at finer temporal scales or at multiple scales to discern how the animal(s) of interest move across the landscape. To improve upon the existing visualization I developed, I have provided options to plot this heatmap at one of three different scales: daily, weekly, monthly. Examples of each scale is shown for a single individual (**Khani1**):
+
+```{r}
+
+#Define initial activity centers (top 20 by # of obs)
+tmp<- colSums(obs[,-1]) %>% data.frame(grid.cell = colnames(obs[,-1]), nobs = .) %>%
+      arrange(desc(nobs)) %>% slice(n=1:20) %>% dplyr::select(grid.cell)
+tmp<- tmp$grid.cell %>% as.character() %>% as.numeric()
+ind<- sample(tmp, size = 10, replace = F)
+ac.coord.init<- grid.coord.med[ind,]
+
+#top 10
+ac.coord.init2<- grid.coord.med[tmp,]
+
+#potential locations for activity centers (AC)
+possib.ac=grid.coord.med
+```
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+#########################
+### Run Gibbs sampler ###
+#########################
+
+#basic setup
+ngibbs=1000
+nburn=ngibbs/2
+n.ac=10
+gamma1=0.1
+
+#run gibbs sampler
+options(warn=2)
+
+dat.res=gibbs.activity.center(dat=obs1,grid.coord=grid.coord.med[,-3],n.ac=n.ac,
+                          ac.coord.init=ac.coord.init[,-3],gamma1=gamma1,
+                          possib.ac=possib.ac[,-3])
+```
+
+```{r}
+##############################################
+### Extract AC Coordinates and Assignments ###
+##############################################
+
+##use ACs from iteration with max log likelihood (after burn-in)
+ML<- dat.res$logl %>% order(decreasing = T)
+ML<- ML[ML > 500][1]
+ac<- dat.res$z[ML,]
+phi<- dat.res$phi[ML,]
+ac.coords<- matrix(NA, length(unique(ac)), 2)
+colnames(ac.coords)<- c("x","y")
+tmp<- dat.res$coord[ML,]
+
+for (i in 1:length(unique(ac))) {
+  ac.coords[i,]<- round(c(tmp[i], tmp[i+length(unique(ac))]), 0)
+}
+
+#reorder ACs from W -> E
+ac.coords<- data.frame(ac.coords, ac=1:length(unique(ac))) %>% .[order(.$x, decreasing = FALSE),]
+ac.coords<- cbind(ac.coords, ac.we = 1:nrow(ac.coords))
+
+ac.we<- list()
+for (i in 1:length(ac)) {
+  ac.we[i]<- which(ac[i] == ac.coords$ac)
+}
+ac.we<- unlist(ac.we)  #ac assignments order W -> E
+
+
+############################
+### Add ACs to Dataframe ###
+############################
+
+tseg.length<- dat %>% group_by(id, tseg) %>% tally()
+tseg.length<- tseg.length$n
+ac.aug<- rep(ac.we, times = tseg.length)
+
+dat$ac<- ac.aug
+```
+
+```{r, fig.align='center', out.width='1.0\\linewidth', fig.pos='H', fig.cap="The 10 ACs identified by the model are plotted over the observations of all four snow leopards. These locations appear to be much better estimates of high intensity use compared to when the centroids were originally used. ACs are numbered 1 to 10 from west to east."}
+
+# ACs and observations
+ggplot() +
+  geom_sf(data = afg) +
+  geom_sf(data = rivers10, color = "lightblue", alpha = 0.65, lwd = 5) +
+  coord_sf(xlim = c(min(dat$x-10000), max(dat$x+10000)),
+           ylim = c(min(dat$y-10000), max(dat$y+10000)), expand = FALSE) +
+  geom_point(data = dat, aes(x, y, fill = "Observations"), shape = 21, size = 1,
+             alpha = 0.2) +
+  geom_point(data = ac.coords, aes(x, y, fill = "ACs"), shape = 21, size = 3, alpha = 0.8) +
+  labs(x="Longitude", y="Latitude") +
+  scale_fill_manual("", values = c(viridis(n=5)[4],"grey55")) +
+  theme_bw() +
+  theme(legend.position = "top", axis.title = element_text(size = 16),
+        axis.text = element_text(size = 12), legend.text = element_text(size = 12))
+```
+
+
+```{r, fig.align='center', out.width='1.0\\linewidth', fig.pos='H'}
+
+## AC Heatmap by month and year
+dat.list<- df.to.list(dat)
+
+#month
+plot.ac.spatemp(data = dat.list[1], ac.coords = ac.coords, units = month)
+
+#week
+plot.ac.spatemp(data = dat.list[1], ac.coords = ac.coords, units = week)
+
+#day
+plot.ac.spatemp(data = dat.list[1], ac.coords = ac.coords, units = day)
+```
+\hfill\break
+
+Based only on the heatmaps at the monthly and weekly scale, you would only be able to say that **Khani1** is using ACs 1-4 relatively evenly every few weeks, but otherwise cannot discern any type of pattern. It is not until inspecting the heatmap at the daily scale that a pattern emerges, showing that **Khani1** is traversing his territory in a very regular pattern and does not dwell around any one AC longer than others over the course of an entire year. By inspecting these plots for all individuals, the user can compare intraspecfic movement patterns that may possibly be explained by "personality", age class, sex, available resources, etc.
+
+Additional visualization tools, namely the comparison of all individuals simultaneously or pooled together, would likely be useful. This would allow direct comparisons among individual patterns of AC use or the frequency of AC use over time by the entire tagged population, respectively.
+
+
+# Visualize distance decay function
+
+Although the point locations of ACs are of direct interest since that is the method by which we intend to analyze space-use, the estimates of these locations are informed by the use of a distance decay function. By plotting the surface of these probabilities generated by the decay function for each AC, we can visualize the uncertainty associated with the estimated AC locations. Due to our model structure, this raster surface can only be shown properly using the same resolution as the grid on which the observations were discretized (i.e., 7 km resolution for snow leopards). For now, these decay surfaces are shown for each of the ACs separately.
+
+```{r, fig.align='center', fig.width=6, fig.height=6, fig.pos='H'}
+
+# Distance decay surface
+
+grid<- create.grid(dat=dat, crs=utm.crs, extent=extent, res=res, buffer=buffer)
+grid[]<- 0
+
+#pre-calculate distances between each potential AC location (possib.ac) and each actual location in our data (grid.coord.med)
+dist.mat=GetDistance(AcCoord=data.matrix(ac.coords[,-3]),
+                     GridCoord=data.matrix(grid.coord.med[,-3]), 
+                     Ngrid=nrow(grid.coord.med), Nac=nrow(ac.coords))
+
+prob=exp(-phi*dist.mat)
+prob=prob/rowSums(prob)
+
+#plot distance decay surface per AC
+
+
+par(mfrow = c(4,3))
+par(mar=c(1.5,2,1.5,2))
+for (i in 1:nrow(ac.coords)) {
+grid[grid.coord.med$grid.cell]<- prob[,i]  #change prob column to explore each AC
+plot(grid, axes = F, useRaster = F, main = paste("AC",i))
+points(ac.coords$x, ac.coords$y, pch = 16)
+}
+```
+\hfill\break
+
+Based on these results, the function decays rapdily beyond a one pixel buffer for ACs near the middle, but extends further out for ACs on the western and eatsern edges. This partially depends on the proximity of a given AC to other surrounding ACs. Therefore, these rasters appear to show that the probability of placing each of these ACs is quite limited. Another factor affecting the decay surface is that only 51 cells were occupied and we were trying to identify 10 ACs at most. Therefore, the distance decay surface would likely look different for the snail kite data since there are many more occupied cells compared to AC locations.
